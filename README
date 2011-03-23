@@ -1,0 +1,75 @@
+High Performance Java XML Parser (HPJXP)
+http://www.thebuzzmedia.com/software/high-performance-java-xml-parser-hpjxp/
+
+
+Changelog
+---------
+
+Work in Progress, no release at this time.
+
+
+License
+-------
+This library is released under the Apache 2 License. See LICENSE.
+
+
+Description
+-----------
+Project goal is to create the world's fastest XML parser by making the following
+design decisions up-front:
+
+	* Non-validating, no logic inside the parser to honor a DTD or Schema
+	* Non-well-formedness, parser looks for tag boundaries only.
+	* No byte-to-char decoding until the value is retrieved
+
+All parsing is done directly on the raw bytes, marking off tag boundaries and
+firing back XML Pull-esque-events to the caller when found. Only when the
+values from the XML are retrieved is anything parsed out of the data stream.
+
+
+Performance
+-----------
+TBD
+
+
+Example
+-------
+TBD
+
+
+How it Works
+------------
+TBD
+
+
+Memory/CPU Overhead
+-------------------
+TBD
+
+
+Runtime Requirements
+--------------------
+TBD
+
+
+History
+-------
+To-be-written
+
+
+Troubleshooting
+---------------
+Here are some issues you might run into and what you can do to correct it.
+
+TBD
+		 
+
+Reference
+---------
+TBD
+
+
+Contact
+-------
+If you have questions, comments or bug reports for this software please contact
+us at: software@thebuzzmedia.com
