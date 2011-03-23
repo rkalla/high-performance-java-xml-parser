@@ -57,6 +57,12 @@ public class DefaultByteSource implements IByteSource {
 		return array;
 	}
 
+	public byte[] copyArray() {
+		byte[] copy = new byte[length];
+		System.arraycopy(array, index, copy, 0, length);
+		return copy;
+	}
+
 	public char[] decodeToChars() {
 		return (length == 0 ? EMPTY_CHAR_ARRAY : CodingUtil.decode(index,
 				length, array));

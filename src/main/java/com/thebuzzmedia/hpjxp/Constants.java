@@ -16,5 +16,7 @@ public class Constants {
 	public static final byte[] NS = { 120, 109, 108, 110, 115 }; // xmlns
 	public static final byte[] NS_CAP = { 88, 77, 76, 78, 83 }; // XMLNS
 
+	public static final byte[] TN_TERM = { SP, FS, GT, TB, LF, CR };
+
 	public static final int INVALID = -1;
 }

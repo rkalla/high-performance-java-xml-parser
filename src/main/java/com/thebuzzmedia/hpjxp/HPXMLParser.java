@@ -11,43 +11,85 @@ import com.thebuzzmedia.hpjxp.util.ScannerUtil;
 
 public class HPXMLParser {
 	// TODO: reset back to Boolean.getBoolean("hpjxp.debug");
-	public static final Boolean DEBUG = true;
+	public static final Boolean DEBUG = false;
 	public static final Integer BUFFER_SIZE = Integer.getInteger(
 			"hpjxp.bufferSize", 131072); // 1024*128 = 131072 (128k)
 
 	public static final String LOG_PREFIX = "[hpjxp] ";
 
-	public static enum EventType {
+	/*
+	 * TODO: rename to STATE, makes a bit more sense intuitively...
+	 * "I am currently looking at a TAG, or text, etc." and then the getter
+	 * methods make more sense.
+	 * 
+	 * TODO: Maybe provide accessor methods on the state itself?
+	 */
+	public static enum State {
 		/**
-		 * An event type representing the parsing of a start-tag (e.g.
-		 * &lt;hello&gt;).
+		 * Used to describe the state the parser is in once it has found and
+		 * marked the bounds of a start tag (e.g. &lt;hello&gt; or
+		 * &lt;hello/&gt;).
+		 * <p/>
+		 * <h3>Valid Operations</h3> When the parser is in this state, the
+		 * following data-retrieval operations are valid:
+		 * {@link HPXMLParser#getTagName()}.
+		 * <p/>
+		 * <h3>Empty Elements</h3> When an empty element (e.g. &lt;hello/&gt;)
+		 * is encountered, the first call to {@link HPXMLParser#next()} will
+		 * return a {@link #START_TAG} state and the second call will return a
+		 * symmetrical {@link #END_TAG} state. This was done to make handling
+		 * different tag types transparent to the caller; they can just code
+		 * START/END handlers and the parser will do the right thing.
 		 */
 		START_TAG,
 		/**
-		 * An event type representing the parsing of text between a start and
-		 * end tag.
+		 * Used to describe the state the parser is in once it has found and
+		 * marked the bounds of a full run of character data (text between &gt;
+		 * and &lt; chars of separate tags).
+		 * <p/>
+		 * <h3>Valid Operations</h3> When the parser is in this state, the
+		 * following data-retrieval operations are valid:
+		 * {@link HPXMLParser#getText()}.
 		 */
 		TEXT,
 		/**
-		 * An event type representing the parsing of an end-tag (e.g.
-		 * &lt;/hello&gt;).
+		 * Used to describe the state the parser is in once it has found and
+		 * marked the bounds of an end tag (e.g. &lt;/hello&gt; or the second
+		 * call to {@link HPXMLParser#next()} for an empty element like
+		 * &lt;hello/&gt;).
+		 * <p/>
+		 * <h3>Valid Operations</h3> When the parser is in this state, the
+		 * following data-retrieval operations are valid:
+		 * {@link HPXMLParser#getTagName()}.
+		 * <p/>
+		 * <h3>Empty Elements</h3> When an empty element (e.g. &lt;hello/&gt;)
+		 * is encountered, the first call to {@link HPXMLParser#next()} will
+		 * return a {@link #START_TAG} state and the second call will return a
+		 * symmetrical {@link #END_TAG} state. This was done to make handling
+		 * different tag types transparent to the caller; they can just code
+		 * START/END handlers and the parser will do the right thing.
 		 */
 		END_TAG,
 		/**
-		 * An event type representing the end of the document being hit and no
-		 * more data left to parse.
+		 * Used to describe the state the parser is in once it has scanned all
+		 * characters in its internal <code>byte[]</code> buffer and the given
+		 * input source ({@link HPXMLParser#setInput(InputStream)}) returns
+		 * <code>-1</code> indicating no more data is available.
+		 * <p/>
+		 * <h3>Valid Operations</h3> When the parser is in this state, the
+		 * following data-retrieval operations are valid: <em>none</em>.
 		 */
 		END_DOCUMENT;
 	}
+
+	private boolean isEmptyElement = false;
 
 	private int idx = 0;
 	private int gIdx = 0;
 	private int sIdx = Constants.INVALID;
 	private int eIdx = Constants.INVALID;
 
-	private long elapsedTime = 0;
-
-	private EventType eventType;
+	private State state;
 
 	private int bufferLength;
 	private byte[] buffer;
@@ -62,8 +104,7 @@ public class HPXMLParser {
 	public String toString() {
 		return this.getClass().getName() + "[idx=" + idx + ", sIdx=" + sIdx
 				+ ", eIdx=" + eIdx + ", bufferLength=" + bufferLength
-				+ ", eventType=" + eventType + ", elapsedTime=" + elapsedTime
-				+ "]";
+				+ ", state=" + state + "]";
 	}
 
 	public void setInput(InputStream input) throws IOException {
@@ -82,22 +123,38 @@ public class HPXMLParser {
 	}
 
 	/**
-	 * Used to progress the parsing of the underlying XML input source forward
-	 * by processing the <code>byte</code>-stream until the next
-	 * {@link EventType} of interest is encountered. <h3>Performance</h3> This
-	 * method merely detects and marks the bounds of interesting bits of
-	 * <code>byte</code> data in the underlying stream; no data is copied out of
-	 * the stream or processed until the caller calls one of the appropriate
-	 * <code>getXXX</code> methods.
+	 * Used to get the current state which will be equivalent to the last value
+	 * returned by {@link #nextState()}.
+	 * <p/>
+	 * This method will not advance the parser through the data stream at all
+	 * and is a simple accessor to the underlying current state.
+	 * 
+	 * @return the current state of the parser.
+	 */
+	public State getState() {
+		return state;
+	}
+
+	/**
+	 * Used to advance the parser forward through the underlying data stream
+	 * until the next {@link State} of interest is encountered.
+	 * <p/>
+	 * <h3>Performance</h3>
+	 * This method merely detects and marks the bounds of interesting bits of
+	 * data in the underlying stream (matching the different {@link State}s this
+	 * parser can be in). No data is copied out of the stream or processed until
+	 * the caller calls one of the appropriate <code>getXXX</code> methods.
 	 * <p/>
 	 * This method behaves like a lexer, running as fast as possible through the
-	 * <code>byte</code>-stream, marking off indices of TAG and TEXT data every
-	 * time this method is called.
+	 * <code>byte</code>-stream until a point of interest is encountered, then
+	 * stopping, returning the new state to the caller, giving them a chance to
+	 * retrieve the value before invoking this method again and moving the
+	 * parsing forward again.
 	 * 
 	 * @return an value used to signal the type of data that was encountered
-	 *         during parsing. Keying off of this value the caller can then call
-	 *         any of the appropriate <code>getXXX</code> methods to retrieve
-	 *         the data the parser has encountered.
+	 *         during parsing. The caller is meant to use the return type to
+	 *         determine which <code>getXXX</code> methods are appropriate to
+	 *         call to retrieve the data the parser has encountered.
 	 * 
 	 * @throws IOException
 	 *             if any error occurs reading data from the underlying input
@@ -105,18 +162,31 @@ public class HPXMLParser {
 	 * @throws XMLParseException
 	 *             if the XML content is sufficiently malformed to the point the
 	 *             parser cannot make heads or tales of it OR if the XML file
-	 *             contains TEXT or TAG constructs so large, that they do not
-	 *             fit inside of the internal buffer. In this case, increasing
-	 *             the value of {@link #BUFFER_SIZE} is required. This should
-	 *             only occur with oddly enormous files though.
+	 *             contains TEXT or TAG constructs so large, that a single TAG
+	 *             or TEXT construct does not fit inside of the internal buffer
+	 *             at one time. In this case, increasing the value of
+	 *             {@link #BUFFER_SIZE} is required. This should only occur with
+	 *             oddly enormous files though.
 	 */
-	public EventType next() throws IOException, XMLParseException {
-		long startTime = System.currentTimeMillis();
+	public State nextState() throws IOException, XMLParseException {
+		/*
+		 * Before we do anything, if we were processing an empty element
+		 * (<hello/>) we need to finish "processing" it by flipping out
+		 * empty-element flag and returning the END_TAG event to match the
+		 * previous START_TAG event for this element.
+		 * 
+		 * Only on the following call to next() will we move forward with
+		 * parsing again.
+		 */
+		if (isEmptyElement) {
+			isEmptyElement = false;
+			return (state = State.END_TAG);
+		}
 
 		/*
 		 * First, move the buffer index to point at the byte right after
 		 * whatever the end of the last thing we marked was. Even on the first
-		 * run when eIdx is -1, this puts us comfortable at index 0 to begin.
+		 * run when eIdx is -1, this puts us comfortably at index 0 to begin.
 		 */
 		idx = eIdx + 1;
 
@@ -125,15 +195,7 @@ public class HPXMLParser {
 
 		// Check for EOF
 		if (bufferLength == -1) {
-			if (DEBUG) {
-				elapsedTime += (System.currentTimeMillis() - startTime);
-				System.out
-						.println(LOG_PREFIX
-								+ "Parse complete, total elapsed time spent inside of HPJXP: "
-								+ elapsedTime + "ms.");
-			}
-
-			return (eventType = EventType.END_DOCUMENT);
+			return (state = State.END_DOCUMENT);
 		}
 
 		/*
@@ -162,13 +224,26 @@ public class HPXMLParser {
 								+ " in the XML document. Either the XML is malformed or contains TAG/TEXT constructs so long that BUFFER_SIZE will need to be increased to hold it in memory at one time.");
 
 			/*
-			 * Check if we are dealing with a START or END tag based on the '/'
-			 * char immediately following the '<' char.
+			 * First, if we are dealing with an empty element (<book/>) in which
+			 * case we treat it special so it triggers both the START and END
+			 * events for the same marks.
+			 * 
+			 * If this isn't an empty element, then we just need to figure out
+			 * if it is a START_TAG (<hello>) or an END_TAG (</hello>).
 			 */
-			if (buffer[sIdx + 1] == Constants.FS)
-				eventType = EventType.END_TAG;
+			if (buffer[eIdx - 1] == Constants.FS) {
+				// Set the empty element flag
+				isEmptyElement = true;
+
+				// Adjust eIdx to not include the ending '/'
+				eIdx--;
+
+				// First call to next is START, next is END, then we move on.
+				state = State.START_TAG;
+			} else if (buffer[sIdx + 1] == Constants.FS)
+				state = State.END_TAG;
 			else
-				eventType = EventType.START_TAG;
+				state = State.START_TAG;
 		} else {
 			/*
 			 * Processing TEXT, so the '<' we found is actually 1 after the
@@ -177,45 +252,93 @@ public class HPXMLParser {
 			 */
 			eIdx = sIdx - 1;
 			sIdx = idx;
-			eventType = EventType.TEXT;
+			state = State.TEXT;
 		}
 
-		if (DEBUG) {
-			elapsedTime += (System.currentTimeMillis() - startTime);
+		if (DEBUG)
 			System.out.println(LOG_PREFIX + "[idx=" + idx + ",eventType="
-					+ eventType + ", sIdx=" + sIdx + ", eIdx=" + eIdx
-					+ ", length=" + (eIdx - sIdx + 1) + "]");
-		}
+					+ state + ", sIdx=" + sIdx + ", eIdx=" + eIdx + ", length="
+					+ (eIdx - sIdx + 1) + "]");
 
-		return eventType;
+		return state;
 	}
 
+	/**
+	 * Used to get the name of the tag currently marked by the parser before
+	 * returning a {@link State#START_TAG} or {@link State#END_TAG} event from
+	 * {@link #nextState()} to the caller.
+	 * <p/>
+	 * <h3>Return Value Warning</h3>
+	 * In order to make value-processing as fast as possible, this method
+	 * returns an instance of {@link IByteSource} that simply wraps the
+	 * underlying, volatile <code>byte[]</code> buffer used by the parser.
+	 * <p/>
+	 * The index, length and data described by the returned {@link IByteSource}
+	 * are guaranteed to be valid until the next call to {@link #nextState()}
+	 * (which has the potential to not only shift the internal indices, but also
+	 * refill the buffer contents).
+	 * <p/>
+	 * Because of this design, it is imperative that {@link IByteSource}'s are
+	 * never stored directly, but instead a copy of the <code>byte</code> values
+	 * is stored or decoding the bytes into a <code>char[]</code> or
+	 * {@link String} and storing that value instead.
+	 * <p/>
+	 * Fortunately the {@link IByteSource} provides a multitude of
+	 * conversion/decoding methods to make this process easy.
+	 * <p/>
+	 * This design was chosen because of the huge win in parsing performance as
+	 * well as memory usage; the only usage-requirement being that the returned
+	 * value needs to be processed/converted/copied right away and not stored
+	 * as-is.
+	 * 
+	 * @return a wrapper around the underlying <code>byte[]</code> buffer used
+	 *         by the parser, marking the bytes that make up the tag name.
+	 * 
+	 * @throws IllegalStateException
+	 *             if current parser state is not {@link State#START_TAG} or
+	 *             {@link State#END_TAG}.
+	 */
 	public IByteSource getTagName() throws IllegalStateException {
-		if (eventType != EventType.START_TAG && eventType != EventType.END_TAG)
+		if (state != State.START_TAG && state != State.END_TAG)
 			throw new IllegalStateException(
-					"getTagName() can only be called immediately after a START_TAG or END_TAG event, but this parser is currently at event: "
-							+ eventType);
+					"getTagName() can only be called when the parser is in a START_TAG or END_TAG state, but this parser is currently in state: "
+							+ state);
 
-		int wsIdx = ScannerUtil.indexOf(Constants.WS, sIdx, (eIdx - sIdx + 1),
-				buffer);
+		int nameStartIdx = sIdx;
 
-		// No whitespace means a plain tag, e.g. <hello>.
-		if (wsIdx == Constants.INVALID)
-			wsIdx = eIdx;
+		/*
+		 * sIdx points at the opening '<' char. For a START_TAG event, sIdx+1 is
+		 * always the beginning of the tag name. For an END_TAG event, in the
+		 * case of an empty element (<hello/>), sIdx+1 is the start of the tag
+		 * name and in the case of a normal closing tag (</hello>), sIdx+2 is
+		 * the start of the tag name.
+		 */
+		if (state == State.START_TAG || buffer[sIdx + 1] != Constants.FS)
+			nameStartIdx = sIdx + 1;
+		else
+			nameStartIdx = sIdx + 2;
 
-		return copyAndCreateByteSource(
-				(eventType == EventType.START_TAG ? sIdx + 1 : sIdx + 2),
-				(wsIdx - sIdx - (eventType == EventType.START_TAG ? 1 : 2)),
+		/*
+		 * Attempt to find the end of the tag name by searching for whitespace
+		 * (e.g. <hello attr="bob"> or tag-terminating constructs (e.g. '>' or
+		 * '/') after the calculated start index to the end of our marked
+		 * bounds.
+		 */
+		int nameEndIdx = ScannerUtil.indexOf(Constants.TN_TERM, nameStartIdx,
+				(eIdx - nameStartIdx + 1), buffer);
+
+		// Return a wrapper around the tag name bits of the buffer.
+		return new DefaultByteSource(nameStartIdx, nameEndIdx - nameStartIdx,
 				buffer);
 	}
 
 	public IByteSource getText() throws IllegalStateException {
-		if (eventType != EventType.TEXT)
+		if (state != State.TEXT)
 			throw new IllegalStateException(
 					"getText() can only be called immediately after a TEXT event, but this parser is currently at event: "
-							+ eventType);
+							+ state);
 
-		return copyAndCreateByteSource(sIdx, (eIdx - sIdx), buffer);
+		return new DefaultByteSource(sIdx, (eIdx - sIdx), buffer);
 	}
 
 	protected void reset() {
@@ -224,10 +347,9 @@ public class HPXMLParser {
 		sIdx = Constants.INVALID;
 		eIdx = Constants.INVALID;
 
-		elapsedTime = 0;
 		bufferLength = 0;
 
-		eventType = null;
+		state = null;
 		input = null;
 	}
 
@@ -382,97 +504,29 @@ public class HPXMLParser {
 		return index;
 	}
 
-	// protected void markTagBounds() throws IOException, XMLParseException {
-	// // Remember the number of bytes we kept IF we have to refill and rescan
-	// int keepLength = bufferLength - idx;
-	//
-	// // Attempt to find the next '<' char index.
-	// sIdx = (buffer[idx] == Constants.LT ? idx : ScannerUtil.indexOf(
-	// Constants.LT, idx, bufferLength - idx, buffer));
-	//
-	// // Could not find '<'
-	// if (sIdx == Constants.INVALID) {
-	// /*
-	// * Only try and refill/rescan if we have space in the buffer for new
-	// * content to scan. If idx == 0 that means we were staring at the
-	// * beginning of the buffer and have NO extra space to fill in with
-	// * new content; it is all already new content.
-	// */
-	// if (idx > 0) {
-	// /*
-	// * Fill the buffer with new content to scan, replacing the
-	// * indices of content we've already looked at previously.
-	// */
-	// fillBuffer();
-	//
-	// // Try 1 more time to scan for '<' in the new bytes only
-	// sIdx = ScannerUtil.indexOf(Constants.LT, keepLength,
-	// (bufferLength - keepLength), buffer);
-	// }
-	//
-	// // Still can't find '<', something is wrong.
-	// if (sIdx == Constants.INVALID)
-	// throw new XMLParseException(
-	// lineCount,
-	// "Unable to mark tag bounds; no opening '<' char found after scanning "
-	// + bufferLength
-	// +
-	// " bytes and exhausting the buffer contents. Either this XML file is malformed or has very large tag constructs and the BUFFER_SIZE must be increased to parse this file.");
-	// }
-	//
-	// // Update the number of bytes we kept IF we have to refill and rescan
-	// keepLength = bufferLength - idx;
-	//
-	// // Attempt to find the next '>' char index, closing this tag.
-	// eIdx = ScannerUtil.indexOf(Constants.GT, sIdx, bufferLength - sIdx,
-	// buffer);
-	//
-	// // Could not find '>'
-	// if (eIdx == Constants.INVALID) {
-	// /*
-	// * Only try and refill/rescan if we have space in the buffer for new
-	// * content to scan. If idx == 0 that means we were staring at the
-	// * beginning of the buffer and have NO extra space to fill in with
-	// * new content; it is all already new content.
-	// */
-	// if (idx > 0) {
-	// /*
-	// * Fill the buffer with new content to scan, replacing the
-	// * indices of content we've already looked at previously.
-	// */
-	// fillBuffer();
-	//
-	// // Try 1 more time to scan for '>' in the new bytes only
-	// eIdx = ScannerUtil.indexOf(Constants.GT, keepLength,
-	// (bufferLength - keepLength), buffer);
-	// }
-	//
-	// // Still can't find '>', something is wrong.
-	// if (eIdx == Constants.INVALID)
-	// throw new XMLParseException(
-	// lineCount,
-	// "Unable to mark tag bounds; no closing '>' char found after scanning "
-	// + bufferLength
-	// +
-	// " bytes and exhausting the buffer contents. Either this XML file is malformed or has very large tag constructs and the BUFFER_SIZE must be increased to parse this file.");
-	//
-	// }
-	//
-	// // Determine if we are inside an open <hello> or close </hello> tag
-	// if (sIdx < eIdx && buffer[sIdx + 1] == Constants.FS)
-	// isOpenTag = false;
-	// else
-	// isOpenTag = true;
-	// }
-
-	protected IByteSource copyAndCreateByteSource(int index, int length,
-			byte[] data) {
-		byte[] source = new byte[length];
-		System.arraycopy(data, index, source, 0, length);
-		return new DefaultByteSource(source);
-	}
-
-	protected void doStartTag() {
-
+	/**
+	 * Used to wrap the parser's underlying <code>buffer</code> with a scoped
+	 * (index, length) {@link IByteSource} making it easy to directly access the
+	 * underlying bytes from the byte stream that have been read in by the
+	 * parser without needing to make a <code>byte[]</code> copy. <h3>Usage
+	 * Warning</h3> <strong>WARNING</code>: In order to make parsing and data
+	 * processing as fast as possible, this method wraps the underlying XML
+	 * parser's <code>buffer</code> with a scoped {@link IByteSource}. The
+	 * underlying <code>byte[]</code> backing the returned value can change at
+	 * any point AFTER the caller has called {@link #nextState()} again.
+	 * <p/>
+	 * This design was employed because as long as the caller stores the value
+	 * from {@link #getTagName()}, {@link #getText()}, etc. right away, before
+	 * returning and calling {@link #nextState()} again, there is a big
+	 * performance gain by avoiding the array copy.
+	 * 
+	 * @param index
+	 * @param length
+	 * @param source
+	 * 
+	 * @return
+	 */
+	protected IByteSource createBsyteSource(int index, int length, byte[] source) {
+		return new DefaultByteSource(index, length, source);
 	}
 }
