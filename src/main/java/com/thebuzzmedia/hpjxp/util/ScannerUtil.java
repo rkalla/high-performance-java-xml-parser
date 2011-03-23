@@ -31,12 +31,46 @@ public class ScannerUtil {
 	}
 
 	public static int indexOf(byte[] values, int index, int length, byte[] data) {
-		int result = index;
+		int valuesLength = values.length;
 
-		for (int end = (index + length); result < end; result++) {
-			for (int j = 0, jLength = values.length, val = data[result]; j < jLength; j++) {
+		for (int end = (index + length); index < end; index++) {
+			int j = 0;
+
+			// Increment j as many times as we can match.
+			for (; j < valuesLength && data[index + j] == values[j]; j++)
+				;
+
+			/*
+			 * If j was incremented to match the length of values[], then we
+			 * found a complete match, otherwise we didn't and we need to return
+			 * to the outer loop to hunt some more, but we can at least skip the
+			 * chars we tried to match already.
+			 */
+			if (j == valuesLength)
+				return index;
+			else
+				index += j;
+		}
+
+		return Constants.INVALID;
+	}
+
+	public static int indexOfAny(byte[] values, byte[] data) {
+		return indexOfAny(values, 0, data.length, data);
+	}
+
+	public static int indexOfAny(byte[] values, int index, byte[] data) {
+		return indexOfAny(values, index, (data.length - index), data);
+	}
+
+	public static int indexOfAny(byte[] values, int index, int length,
+			byte[] data) {
+		int valuesLength = values.length;
+
+		for (int end = (index + length); index < end; index++) {
+			for (int j = 0, val = data[index]; j < valuesLength; j++) {
 				if (val == values[j])
-					return result;
+					return index;
 			}
 		}
 

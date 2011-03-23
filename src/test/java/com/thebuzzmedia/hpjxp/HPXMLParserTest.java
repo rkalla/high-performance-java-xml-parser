@@ -71,6 +71,37 @@ public class HPXMLParserTest {
 	}
 	
 	@Test
+	public void testParserBasicCData() {
+		try {
+			HPXMLParser parser = new HPXMLParser();
+			parser.setInput(this.getClass().getResourceAsStream(
+					"resources/basic_cdata.xml"));
+
+			State evt = null;
+			int indent = 0;
+
+			while ((evt = parser.nextState()) != State.END_DOCUMENT) {
+				 System.out.println("EVT: " + evt);
+				switch (evt) {
+				case START_TAG:
+					System.out.println(new String(INDENTS, 0, indent++) + "<"
+							+ parser.getTagName().decodeToString() + ">");
+					break;
+				case END_TAG:
+					System.out.println(new String(INDENTS, 0, --indent) + "<"
+							+ parser.getTagName().decodeToString() + ">");
+					break;
+				// case TEXT:
+				// System.out.println("\t\""
+				// + parser.getText().decodeToString() + "\"");
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	@Test
 	public void testParser2() {
 		try {
 			HPXMLParser parser = new HPXMLParser();

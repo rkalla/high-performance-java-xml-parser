@@ -5,6 +5,7 @@ import java.io.InputStream;
 
 import com.thebuzzmedia.hpjxp.buffer.DefaultByteSource;
 import com.thebuzzmedia.hpjxp.buffer.IByteSource;
+import com.thebuzzmedia.hpjxp.util.ArrayUtil;
 import com.thebuzzmedia.hpjxp.util.ScannerUtil;
 
 // TODO: Add support for namespace awareness
@@ -35,11 +36,11 @@ public class HPXMLParser {
 		 * {@link HPXMLParser#getTagName()}.
 		 * <p/>
 		 * <h3>Empty Elements</h3> When an empty element (e.g. &lt;hello/&gt;)
-		 * is encountered, the first call to {@link HPXMLParser#next()} will
-		 * return a {@link #START_TAG} state and the second call will return a
-		 * symmetrical {@link #END_TAG} state. This was done to make handling
-		 * different tag types transparent to the caller; they can just code
-		 * START/END handlers and the parser will do the right thing.
+		 * is encountered, the first call to {@link HPXMLParser#nextState()}
+		 * will return a {@link #START_TAG} state and the second call will
+		 * return a symmetrical {@link #END_TAG} state. This was done to make
+		 * handling different tag types transparent to the caller; they can just
+		 * code START/END handlers and the parser will do the right thing.
 		 */
 		START_TAG,
 		/**
@@ -55,7 +56,7 @@ public class HPXMLParser {
 		/**
 		 * Used to describe the state the parser is in once it has found and
 		 * marked the bounds of an end tag (e.g. &lt;/hello&gt; or the second
-		 * call to {@link HPXMLParser#next()} for an empty element like
+		 * call to {@link HPXMLParser#nextState()} for an empty element like
 		 * &lt;hello/&gt;).
 		 * <p/>
 		 * <h3>Valid Operations</h3> When the parser is in this state, the
@@ -63,11 +64,11 @@ public class HPXMLParser {
 		 * {@link HPXMLParser#getTagName()}.
 		 * <p/>
 		 * <h3>Empty Elements</h3> When an empty element (e.g. &lt;hello/&gt;)
-		 * is encountered, the first call to {@link HPXMLParser#next()} will
-		 * return a {@link #START_TAG} state and the second call will return a
-		 * symmetrical {@link #END_TAG} state. This was done to make handling
-		 * different tag types transparent to the caller; they can just code
-		 * START/END handlers and the parser will do the right thing.
+		 * is encountered, the first call to {@link HPXMLParser#nextState()}
+		 * will return a {@link #START_TAG} state and the second call will
+		 * return a symmetrical {@link #END_TAG} state. This was done to make
+		 * handling different tag types transparent to the caller; they can just
+		 * code START/END handlers and the parser will do the right thing.
 		 */
 		END_TAG,
 		/**
@@ -201,11 +202,33 @@ public class HPXMLParser {
 		/*
 		 * Check if we are processing a TAG (enclosed in <>) or TEXT (everything
 		 * between >< chars). If idx == sIdx (where we found '<') then we are
-		 * just entertain a tag. If sIdx is > idx, then that means we were
-		 * already inside of TEXT data and sIdx now signals the end of that TEXT
-		 * data (the beginning of the next tag right after it).
+		 * just entertain a tag (assuming it isn't a CDATA block, we will check
+		 * for that later). If sIdx is > idx, then that means we were already
+		 * inside of TEXT data and sIdx now signals the end of that TEXT data
+		 * (the beginning of the next tag right after it).
 		 */
 		if (idx == sIdx) {
+			/*
+			 * Before we look for the ending '>' of the tag, we need to know if
+			 * this is a CDATA block, because it's unique markers will screw up
+			 * a regular search for '>' and it means we are in a TEXT state, not
+			 * a TAG one as we thought (so far).
+			 */
+			if (ArrayUtil.equals(Constants.CD_START, sIdx, buffer)) {
+				System.out.println("@@@@@@@@@@@@@@ INSIDE CDATA");
+				// Adjust sIdx to point beyond CDATA start
+				sIdx += Constants.CD_START.length;
+
+				/*
+				 * TODO: Need to be able to scan-refill-mark for the ending
+				 * CDATA ]]> notation. In order to keep the functionality that
+				 * mark performs for us, may need to modify that method to
+				 * accept a byte[] which would require defining all the existing
+				 * single-char constants as single-byte arrays or something like
+				 * that.
+				 */
+			}
+
 			// Processing a TAG, so find the end of it ('>')
 			eIdx = mark(Constants.GT);
 
@@ -246,9 +269,10 @@ public class HPXMLParser {
 				state = State.START_TAG;
 		} else {
 			/*
-			 * Processing TEXT, so the '<' we found is actually 1 after the
-			 * ending index of the run of character data and idx is our
-			 * beginning index.
+			 * Processing TEXT, so the '<' we just found is actually the
+			 * terminating character to the run of characters and the beginning
+			 * of the characters is where idx is currently pointing (1 after the
+			 * previous end index as adjusted by the top of this method).
 			 */
 			eIdx = sIdx - 1;
 			sIdx = idx;
@@ -324,8 +348,8 @@ public class HPXMLParser {
 		 * '/') after the calculated start index to the end of our marked
 		 * bounds.
 		 */
-		int nameEndIdx = ScannerUtil.indexOf(Constants.TN_TERM, nameStartIdx,
-				(eIdx - nameStartIdx + 1), buffer);
+		int nameEndIdx = ScannerUtil.indexOfAny(Constants.TN_TERM,
+				nameStartIdx, (eIdx - nameStartIdx + 1), buffer);
 
 		// Return a wrapper around the tag name bits of the buffer.
 		return new DefaultByteSource(nameStartIdx, nameEndIdx - nameStartIdx,
@@ -341,7 +365,7 @@ public class HPXMLParser {
 		return new DefaultByteSource(sIdx, (eIdx - sIdx), buffer);
 	}
 
-	protected void reset() {
+	private void reset() {
 		idx = 0;
 		gIdx = 0;
 		sIdx = Constants.INVALID;
@@ -377,7 +401,7 @@ public class HPXMLParser {
 	 *             {@link InputStream} provided as the input source for this
 	 *             parser.
 	 */
-	protected int fillBuffer() throws IOException {
+	private int fillBuffer() throws IOException {
 		// Calculate how many bytes to keep
 		int bytesKept = bufferLength - idx;
 		// Keep track of how far these bytes indices are shifted.
@@ -444,7 +468,7 @@ public class HPXMLParser {
 	 *             trying to replace stale data in the <code>buffer</code> with
 	 *             new data.
 	 */
-	protected int mark(byte value) throws IOException {
+	private int mark(byte value) throws IOException {
 		/*
 		 * If a previous mark operation had exhausted the buffer, attempt to
 		 * refill it if we have any data left.
@@ -502,31 +526,5 @@ public class HPXMLParser {
 		}
 
 		return index;
-	}
-
-	/**
-	 * Used to wrap the parser's underlying <code>buffer</code> with a scoped
-	 * (index, length) {@link IByteSource} making it easy to directly access the
-	 * underlying bytes from the byte stream that have been read in by the
-	 * parser without needing to make a <code>byte[]</code> copy. <h3>Usage
-	 * Warning</h3> <strong>WARNING</code>: In order to make parsing and data
-	 * processing as fast as possible, this method wraps the underlying XML
-	 * parser's <code>buffer</code> with a scoped {@link IByteSource}. The
-	 * underlying <code>byte[]</code> backing the returned value can change at
-	 * any point AFTER the caller has called {@link #nextState()} again.
-	 * <p/>
-	 * This design was employed because as long as the caller stores the value
-	 * from {@link #getTagName()}, {@link #getText()}, etc. right away, before
-	 * returning and calling {@link #nextState()} again, there is a big
-	 * performance gain by avoiding the array copy.
-	 * 
-	 * @param index
-	 * @param length
-	 * @param source
-	 * 
-	 * @return
-	 */
-	protected IByteSource createBsyteSource(int index, int length, byte[] source) {
-		return new DefaultByteSource(index, length, source);
 	}
 }

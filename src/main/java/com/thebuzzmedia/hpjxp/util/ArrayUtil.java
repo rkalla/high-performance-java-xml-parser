@@ -19,4 +19,22 @@ public class ArrayUtil {
 		System.arraycopy(array, 0, newArray, 0, array.length);
 		return newArray;
 	}
+
+	public static boolean equals(byte[] values, int index, byte[] source) {
+		boolean result = false;
+		int length = values.length;
+
+		if (index + length <= source.length) {
+			int i = 0;
+
+			// Loop and try and match every value
+			for (; i < length && values[i] == source[index + i]; i++)
+				;
+
+			// If we looped the whole array, then we DID match every value.
+			result = (i == length);
+		}
+
+		return result;
+	}
 }
