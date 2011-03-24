@@ -198,6 +198,16 @@ public class HPXMLParser {
 		if (bufferLength == -1) {
 			return (state = State.END_DOCUMENT);
 		}
+		
+		/*
+		 * TODO: Need to define the possible tag-situations we have here.
+		 * 
+		 * <blah	- normal tag
+		 * <!--		- comment
+		 * <![CDATA[- char data
+		 * <?		- processing instruction
+		 * 
+		 */
 
 		/*
 		 * Check if we are processing a TAG (enclosed in <>) or TEXT (everything
@@ -448,14 +458,33 @@ public class HPXMLParser {
 
 	/**
 	 * Convenience method used to scan the current buffer contents for a given
-	 * <code>byte</code> value.
+	 * <code>byte</code> value, replacing stale data in the buffer with new data
+	 * from the input source as-needed to try and find the value.
 	 * <p/>
-	 * This method will replace any stale data in the buffer from the underlying
-	 * input source if necessary in order to try and find the given
-	 * <code>byte</code> value.
+	 * Data located in the buffer before (but not including) the current
+	 * <code>idx</code> value, is considered "stale" or "processed" already and
+	 * can be safely discarded and replaced with fresh data. When
+	 * <code>idx</code> is equal to 0, that means there are no stale bytes that
+	 * can be expunged from the buffer and it is considered full.
 	 * <p/>
-	 * Searching begins at the current <code>idx</code> and runs to the
-	 * <code>bufferLength</code>.
+	 * Every time stale data is ejected from the buffer, the remaining data (if
+	 * any) is moved to the front of the underlying <code>byte[]</code> buffer
+	 * and new data added in after the kept data to the end of the buffer; or as
+	 * much as was available from the underlying input source.
+	 * <p/>
+	 * One design detail about this method is that it always attempts to fill
+	 * the buffer with at least 9 bytes of data. The reason for this is because
+	 * detecting CDATA sections requires having the entire run of 9-char CDATA
+	 * prefix in the buffer at one time; we don't just want to find the
+	 * beginning &lt; char, we need to know if that is followed by the remaining
+	 * "![CDATA[" chars indicating a CDATA block.
+	 * <p/>
+	 * To avoid making this method implementation more complex and looking for
+	 * <code>byte[]</code> values instead of a single <code>byte</code> value,
+	 * we just always make sure the buffer has at least as many bytes in it from
+	 * the underlying stream as is necessary to detect the longest single run of
+	 * chars that can trigger a state-change in the parser... and that happens
+	 * to be a CDATA block which is 9 characters long.
 	 * 
 	 * @param value
 	 *            The <code>byte</code> value to find the index of.
@@ -470,10 +499,21 @@ public class HPXMLParser {
 	 */
 	private int mark(byte value) throws IOException {
 		/*
+		 * TODO: Because of needing to find the ends of certain tags, like CDATA,
+		 * comments, processing instructions, it might be necessary to modify
+		 * this method to accept and match an array of bytes... 
+		 */
+		
+		
+		/*
 		 * If a previous mark operation had exhausted the buffer, attempt to
 		 * refill it if we have any data left.
+		 * 
+		 * Always make sure there is at least 9 chars in the buffer so we can
+		 * detect the longest run of chars that can cause a State change in the
+		 * parser (a CDATA block).
 		 */
-		if (idx >= bufferLength) {
+		if (idx + 9 >= bufferLength) {
 			fillBuffer();
 
 			/*
