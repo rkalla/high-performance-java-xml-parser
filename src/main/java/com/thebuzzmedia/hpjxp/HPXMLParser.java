@@ -205,7 +205,7 @@ public class HPXMLParser {
 		 */
 		idx = eIdx + 1;
 
-		// Find the next '<', mark will refill the buffer as-needed.
+		// Find the next '<', scan will refill the buffer as-needed.
 		sIdx = scan(Constants.A_LT);
 
 		// Check for EOF
@@ -399,6 +399,11 @@ public class HPXMLParser {
 		if (bytesKept == 0) {
 			bufferLength = input.read(buffer);
 		} else {
+			System.out.println("idx: " + idx + ", sIdx: " + sIdx + ", eIdx: "
+					+ eIdx + ", bufferLength: " + bufferLength
+					+ ", bytesKept: " + bytesKept + ", shiftCount: "
+					+ shiftCount);
+
 			// Move all kept bytes to the beginning of the buffer.
 			System.arraycopy(buffer, idx, buffer, 0, bytesKept);
 
@@ -681,6 +686,13 @@ public class HPXMLParser {
 	 * state is set to {@link State#TEXT}.
 	 */
 	private void handleCharData() {
+		/*
+		 * TODO: Something is going on here with the end of files, running
+		 * simple.xml through parser with test case shows it parse the entire
+		 * thing then throw an exception at the last step as eIdx gets
+		 * decreamented to -2 from this method. Need to research more.
+		 */
+
 		/*
 		 * Processing TEXT, so the '<' we just found is actually the terminating
 		 * character to the run of characters and the beginning of the

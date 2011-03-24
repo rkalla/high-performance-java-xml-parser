@@ -112,7 +112,7 @@ public class HPXMLParserTest {
 			int indent = 0;
 
 			while ((evt = parser.nextState()) != State.END_DOCUMENT) {
-				// System.out.println("EVT: " + evt);
+				 System.out.println("EVT: " + evt);
 				switch (evt) {
 				case START_TAG:
 					System.out.println(new String(INDENTS, 0, indent++) + "<"
