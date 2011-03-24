@@ -192,21 +192,19 @@ public class HPXMLParser {
 		idx = eIdx + 1;
 
 		// Find the next (or first) '<', mark will refill the buffer as-needed.
-		sIdx = mark(Constants.LT);
+//		sIdx = mark(Constants.LT);
+		sIdx = scan(Constants.LT_A);
 
 		// Check for EOF
 		if (bufferLength == -1) {
 			return (state = State.END_DOCUMENT);
 		}
-		
+
 		/*
 		 * TODO: Need to define the possible tag-situations we have here.
 		 * 
-		 * <blah	- normal tag
-		 * <!--		- comment
-		 * <![CDATA[- char data
-		 * <?		- processing instruction
-		 * 
+		 * <blah - normal tag <!-- - comment <![CDATA[- char data <? -
+		 * processing instruction
 		 */
 
 		/*
@@ -240,7 +238,8 @@ public class HPXMLParser {
 			}
 
 			// Processing a TAG, so find the end of it ('>')
-			eIdx = mark(Constants.GT);
+//			eIdx = mark(Constants.GT);
+			eIdx = scan(Constants.GT_A);
 
 			/*
 			 * Mark will continually replace stale data from the buffer in an
@@ -456,6 +455,108 @@ public class HPXMLParser {
 		return bytesKept;
 	}
 
+	private int scan(byte[] values) throws IOException {
+		/*
+		 * If a previous scan operation had exhausted the buffer, attempt to
+		 * refill it if we have any data left.
+		 * 
+		 * The buffer is considered "exhausted" if we have less than
+		 * values.length number of bytes left in the buffer to scan against.
+		 */
+		if (idx + values.length >= bufferLength) {
+			fillBuffer();
+
+			/*
+			 * If we hit EOF as a result of trying to refill the buffer, then we
+			 * have exhausted all data to scan (and all data from the input
+			 * source) and must return INVALID to the caller so it can handle
+			 * the issue of the file being complete.
+			 * 
+			 * This typically signals the END_DOCUMENT event.
+			 */
+			if (bufferLength == -1)
+				return Constants.INVALID;
+		}
+
+		int index = Constants.INVALID;
+		int valuesLength = values.length;
+
+		/*
+		 * Begin scanning the buffer for the values given. Stop scanning as soon
+		 * as a valid index is found (or we hit the end of our buffer).
+		 */
+		for (int i = idx; index == Constants.INVALID && i < bufferLength; i++) {
+			int j = 0;
+
+			// Increment j every time we match a value to the buffer
+			for (; j < valuesLength && values[j] == buffer[i + j]; j++) {
+				// no-op, the for-loop header does all the work.
+			}
+
+			/*
+			 * If j was incremented by the for-loop to valuesLength, that means
+			 * we matched every value to the buffer and we have found our
+			 * starting index.
+			 * 
+			 * If j is less than valuesLength though, it means we matched j
+			 * number of values and can skip ahead (j+1) indices and try to
+			 * match again. We add j down here and the for-loop adds +1 for us
+			 * on the next iteration.
+			 */
+			if (j == valuesLength)
+				index = i;
+			else
+				i += j;
+		}
+
+		/*
+		 * We couldn't find the values anywhere in the buffer and we need more
+		 * bytes to scan. If our idx is > 0, that means there are old byte
+		 * values we have already processed that we can replace with new values
+		 * from the underlying stream in order to continue our search for the
+		 * given value. If idx == 0, that means the entire buffer is already
+		 * full and there is no old data that can be expunged and replaced; we
+		 * would just have to report to the caller that we couldn't find the
+		 * value.
+		 */
+		if (index == Constants.INVALID && idx > 0) {
+			// Replace all old data with new data from input (if available)
+			int bytesKept = fillBuffer();
+
+			/*
+			 * Try 1 more time to find the given value, starting the scan at the
+			 * beginning of the new content we just read in and skipping all the
+			 * stuff we already scanned the first time.
+			 */
+			for (int i = bytesKept; index == Constants.INVALID
+					&& i < bufferLength; i++) {
+				int j = 0;
+
+				// Increment j every time we match a value to the buffer
+				for (; j < valuesLength && values[j] == buffer[i + j]; j++) {
+					// no-op, the for-loop header does all the work.
+				}
+
+				/*
+				 * If j was incremented by the for-loop to valuesLength, that
+				 * means we matched every value to the buffer and we have found
+				 * our starting index.
+				 * 
+				 * If j is less than valuesLength though, it means we matched j
+				 * number of values and can skip ahead (j+1) indices and try to
+				 * match again. We add j down here and the for-loop adds +1 for
+				 * us on the next iteration.
+				 */
+				if (j == valuesLength)
+					index = i;
+				else
+					i += j;
+			}
+		}
+
+		return index;
+	}
+
 	/**
 	 * Convenience method used to scan the current buffer contents for a given
 	 * <code>byte</code> value, replacing stale data in the buffer with new data
@@ -497,14 +598,13 @@ public class HPXMLParser {
 	 *             trying to replace stale data in the <code>buffer</code> with
 	 *             new data.
 	 */
-	private int mark(byte value) throws IOException {
+	private int markOLD(byte value) throws IOException {
 		/*
-		 * TODO: Because of needing to find the ends of certain tags, like CDATA,
-		 * comments, processing instructions, it might be necessary to modify
-		 * this method to accept and match an array of bytes... 
+		 * TODO: Because of needing to find the ends of certain tags, like
+		 * CDATA, comments, processing instructions, it might be necessary to
+		 * modify this method to accept and match an array of bytes...
 		 */
-		
-		
+
 		/*
 		 * If a previous mark operation had exhausted the buffer, attempt to
 		 * refill it if we have any data left.

@@ -11,6 +11,11 @@ public class Constants {
 	public static final byte LB = 91; // [, left bracket
 	public static final byte RB = 93; // ], right bracket
 	
+	// TODO: TRIAL args, array versions so scan(byte[]) is happy
+	public static final byte[] LT_A = {60};
+	public static final byte[] GT_A = {62};
+	// TODO: TRIAL args
+	
 	public static final byte[] C_START = {LT, EP, DA, DA}; // <!-- comment
 	public static final byte[] C_END = {DA, DA, GT}; // -->
 	// CDATA start, <![CDATA[
