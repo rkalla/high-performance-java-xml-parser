@@ -10,6 +10,14 @@ import com.thebuzzmedia.hpjxp.util.ScannerUtil;
 
 // TODO: Add support for namespace awareness
 
+/*
+ * TODO: Need to add support for setting encoding. Make the UTIL class take a 
+ * hashset approach where the key is the encoding and.
+ * 
+ * Alternatively, an instance of this parser class could create it's own 
+ * encoder/decoder and pass them to the ByteSource to use internally when created.
+ */
+
 public class HPXMLParser {
 	// TODO: reset back to Boolean.getBoolean("hpjxp.debug");
 	public static final Boolean DEBUG = false;
@@ -18,13 +26,6 @@ public class HPXMLParser {
 
 	public static final String LOG_PREFIX = "[hpjxp] ";
 
-	/*
-	 * TODO: rename to STATE, makes a bit more sense intuitively...
-	 * "I am currently looking at a TAG, or text, etc." and then the getter
-	 * methods make more sense.
-	 * 
-	 * TODO: Maybe provide accessor methods on the state itself?
-	 */
 	public static enum State {
 		/**
 		 * Used to describe the state the parser is in once it has found and
@@ -83,6 +84,7 @@ public class HPXMLParser {
 		END_DOCUMENT;
 	}
 
+	private boolean isCDATA = false;
 	private boolean isEmptyElement = false;
 
 	private int idx = 0;
@@ -142,9 +144,15 @@ public class HPXMLParser {
 	 * <p/>
 	 * <h3>Performance</h3>
 	 * This method merely detects and marks the bounds of interesting bits of
-	 * data in the underlying stream (matching the different {@link State}s this
-	 * parser can be in). No data is copied out of the stream or processed until
-	 * the caller calls one of the appropriate <code>getXXX</code> methods.
+	 * data in the underlying stream by updating the <code>idx</code> (buffer
+	 * position) <code>sIdx</code> (interesting element start index) and
+	 * <code>eIdx</code> (interesting element end index) values.
+	 * <p/>
+	 * The parser considers anything that might cause a change in {@link State}
+	 * "interesting", so encountering another tag or text block for example.
+	 * <p/>
+	 * No data is copied out of the stream or processed until the caller calls
+	 * one of the appropriate <code>getXXX</code> methods.
 	 * <p/>
 	 * This method behaves like a lexer, running as fast as possible through the
 	 * <code>byte</code>-stream until a point of interest is encountered, then
@@ -170,11 +178,17 @@ public class HPXMLParser {
 	 *             oddly enormous files though.
 	 */
 	public State nextState() throws IOException, XMLParseException {
+		// Mandatory resets
+		isCDATA = false;
+
 		/*
-		 * Before we do anything, if we were processing an empty element
-		 * (<hello/>) we need to finish "processing" it by flipping out
+		 * Before we do anything, if we were processing an empty element (e.g.
+		 * <hello/>) we need to finish "processing" it by flipping our
 		 * empty-element flag and returning the END_TAG event to match the
 		 * previous START_TAG event for this element.
+		 * 
+		 * We don't adjust the sIdx or eIdx as they are still marking the tag
+		 * name in case the caller wants that again.
 		 * 
 		 * Only on the following call to next() will we move forward with
 		 * parsing again.
@@ -191,9 +205,8 @@ public class HPXMLParser {
 		 */
 		idx = eIdx + 1;
 
-		// Find the next (or first) '<', mark will refill the buffer as-needed.
-//		sIdx = mark(Constants.LT);
-		sIdx = scan(Constants.LT_A);
+		// Find the next '<', mark will refill the buffer as-needed.
+		sIdx = scan(Constants.A_LT);
 
 		// Check for EOF
 		if (bufferLength == -1) {
@@ -201,92 +214,49 @@ public class HPXMLParser {
 		}
 
 		/*
-		 * TODO: Need to define the possible tag-situations we have here.
-		 * 
-		 * <blah - normal tag <!-- - comment <![CDATA[- char data <? -
-		 * processing instruction
-		 */
-
-		/*
 		 * Check if we are processing a TAG (enclosed in <>) or TEXT (everything
 		 * between >< chars). If idx == sIdx (where we found '<') then we are
 		 * just entertain a tag (assuming it isn't a CDATA block, we will check
 		 * for that later). If sIdx is > idx, then that means we were already
 		 * inside of TEXT data and sIdx now signals the end of that TEXT data
-		 * (the beginning of the next tag right after it).
+		 * (the beginning of the next tag right after it) and idx marks the
+		 * beginning of it (more specifically, we scanned across all the
+		 * character data and slammed into the next tag that terminates it).
 		 */
 		if (idx == sIdx) {
+			// Ok we are inside a tag, figure out what kind (maybe CDATA)
+			switch (buffer[sIdx + 1]) {
+			// <?, processing instruction
+			case Constants.QM:
+				state = handlePI();
+				break;
+			// <!, comment OR CDATA block
+			case Constants.EP:
+				switch (buffer[sIdx + 2]) {
+				// <!-, comment
+				case Constants.DA:
+					// Fully confirm the comment tag, then handle it.
+					if (ArrayUtil.equals(Constants.CMT_PFX, sIdx, buffer))
+						state = handleComment();
+					break;
+				// <![, CDATA
+				case Constants.LB:
+					// Fully confirm the CDATA block, then handle it.
+					if (ArrayUtil.equals(Constants.CDATA_PFX, sIdx, buffer))
+						handleCDATA();
+					break;
+				}
+				break;
 			/*
-			 * Before we look for the ending '>' of the tag, we need to know if
-			 * this is a CDATA block, because it's unique markers will screw up
-			 * a regular search for '>' and it means we are in a TEXT state, not
-			 * a TAG one as we thought (so far).
+			 * A normal tag. This could be an open tag (<bob>), close tag
+			 * (</bob>) or an empty-element tag (<bob/>).
 			 */
-			if (ArrayUtil.equals(Constants.CD_START, sIdx, buffer)) {
-				System.out.println("@@@@@@@@@@@@@@ INSIDE CDATA");
-				// Adjust sIdx to point beyond CDATA start
-				sIdx += Constants.CD_START.length;
-
-				/*
-				 * TODO: Need to be able to scan-refill-mark for the ending
-				 * CDATA ]]> notation. In order to keep the functionality that
-				 * mark performs for us, may need to modify that method to
-				 * accept a byte[] which would require defining all the existing
-				 * single-char constants as single-byte arrays or something like
-				 * that.
-				 */
+			default:
+				handleTag();
+				break;
 			}
-
-			// Processing a TAG, so find the end of it ('>')
-//			eIdx = mark(Constants.GT);
-			eIdx = scan(Constants.GT_A);
-
-			/*
-			 * Mark will continually replace stale data from the buffer in an
-			 * attempt to find the given value, if it couldn't find it that
-			 * means either the XML is malformed and didn't contain that char,
-			 * or our BUFFER_SIZE wasn't big enough to hold the run of bytes
-			 * representing everything from the start to the end in memory at
-			 * once.
-			 */
-			if (eIdx == Constants.INVALID)
-				throw new XMLParseException(
-						"Unable to find closing '>' for tag beginning at position "
-								+ gIdx
-								+ " in the XML document. Either the XML is malformed or contains TAG/TEXT constructs so long that BUFFER_SIZE will need to be increased to hold it in memory at one time.");
-
-			/*
-			 * First, if we are dealing with an empty element (<book/>) in which
-			 * case we treat it special so it triggers both the START and END
-			 * events for the same marks.
-			 * 
-			 * If this isn't an empty element, then we just need to figure out
-			 * if it is a START_TAG (<hello>) or an END_TAG (</hello>).
-			 */
-			if (buffer[eIdx - 1] == Constants.FS) {
-				// Set the empty element flag
-				isEmptyElement = true;
-
-				// Adjust eIdx to not include the ending '/'
-				eIdx--;
-
-				// First call to next is START, next is END, then we move on.
-				state = State.START_TAG;
-			} else if (buffer[sIdx + 1] == Constants.FS)
-				state = State.END_TAG;
-			else
-				state = State.START_TAG;
-		} else {
-			/*
-			 * Processing TEXT, so the '<' we just found is actually the
-			 * terminating character to the run of characters and the beginning
-			 * of the characters is where idx is currently pointing (1 after the
-			 * previous end index as adjusted by the top of this method).
-			 */
-			eIdx = sIdx - 1;
-			sIdx = idx;
-			state = State.TEXT;
-		}
+		} else
+			handleCharData();
 
 		if (DEBUG)
 			System.out.println(LOG_PREFIX + "[idx=" + idx + ",eventType="
@@ -357,7 +327,7 @@ public class HPXMLParser {
 		 * '/') after the calculated start index to the end of our marked
 		 * bounds.
 		 */
-		int nameEndIdx = ScannerUtil.indexOfAny(Constants.TN_TERM,
+		int nameEndIdx = ScannerUtil.indexOfAny(Constants.TAG_NAME_DELIM,
 				nameStartIdx, (eIdx - nameStartIdx + 1), buffer);
 
 		// Return a wrapper around the tag name bits of the buffer.
@@ -371,7 +341,16 @@ public class HPXMLParser {
 					"getText() can only be called immediately after a TEXT event, but this parser is currently at event: "
 							+ state);
 
-		return new DefaultByteSource(sIdx, (eIdx - sIdx), buffer);
+		IByteSource text = null;
+
+		if (isCDATA)
+			text = new DefaultByteSource(sIdx + Constants.CDATA_PFX.length,
+					eIdx - sIdx - Constants.CDATA_PFX.length
+							- Constants.CDATA_SFX.length + 1, buffer);
+		else
+			text = new DefaultByteSource(sIdx, (eIdx - sIdx + 1), buffer);
+
+		return text;
 	}
 
 	private void reset() {
@@ -398,9 +377,9 @@ public class HPXMLParser {
 	 * source (or as much data as is available from the underlying stream).
 	 * <p/>
 	 * If <code>idx==0</code>, then no new data can be pulled into the buffer as
-	 * it is "full" and if <code>idx==buffer.length-1</code> then the entire
-	 * buffer is overwritten and refilled with fresh content from the input
-	 * source.
+	 * it is considered "full" already. If <code>idx==buffer.length-1</code>
+	 * then the entire buffer is overwritten and refilled with fresh content
+	 * from the input source.
 	 * 
 	 * @return the number of bytes that were kept and moved to the front of the
 	 *         <code>buffer</code>.
@@ -455,15 +434,44 @@ public class HPXMLParser {
 		return bytesKept;
 	}
 
+	/**
+	 * Optimized method used to scan the underlying input stream buffer for the
+	 * given <code>byte[]</code> values, replacing stale data in the buffer
+	 * as-needed (by calling {@link #fillBuffer()}) in order to try and find the
+	 * values.
+	 * <p/>
+	 * In the name of performance this method duplicates its search code and
+	 * avoids calling out into helper libraries so it can complete as fast as
+	 * possible.
+	 * 
+	 * @param value
+	 *            The <code>byte</code> value to find the index of.
+	 * 
+	 * @return the index in <code>buffer</code> where the given values were
+	 *         found or {@link Constants#INVALID} if the value could not be
+	 *         found.
+	 * 
+	 * @throws IOException
+	 *             (calls {@link #fillBuffer()})
+	 */
 	private int scan(byte[] values) throws IOException {
 		/*
 		 * If a previous scan operation had exhausted the buffer, attempt to
 		 * refill it if we have any data left.
 		 * 
-		 * The buffer is considered "exhausted" if we have less than
-		 * values.length number of bytes left in the buffer to scan against.
+		 * The buffer is considered "exhausted" if we have less than 9 or
+		 * values.length number of bytes (whichever is bigger) left in the
+		 * buffer to scan against.
+		 * 
+		 * Because of how nextState matches and detects tag-type when it finds
+		 * '<', in the maximum case we need 9 bytes available in the buffer to
+		 * check the longest tag type (CDATA prefix). So we make sure whenever a
+		 * scan is done that we have at least 9 bytes in our buffer so nextState
+		 * can be coded to always assume it has at least sIdx+8 valid indices it
+		 * can check without doing a fill itself; it keeps the logic up there
+		 * simpler.
 		 */
-		if (idx + values.length >= bufferLength) {
+		if (idx + (9 > values.length ? 9 : values.length) >= bufferLength) {
 			fillBuffer();
 
 			/*
@@ -557,114 +565,132 @@ public class HPXMLParser {
 		return index;
 	}
 
+	private State handlePI() throws IOException, XMLParseException {
+		// Find the end of the processing instruction.
+		eIdx = scan(Constants.PI_SFX);
+
+		if (eIdx == Constants.INVALID)
+			throw new XMLParseException(
+					"Unable to find closing '?>' for the processing-instruction block starting at position "
+							+ gIdx
+							+ " in the XML document. Either the XML is malformed or contains individual TAG/TEXT constructs so long that BUFFER_SIZE will need to be increased in order to hold it in memory at one time.");
+
+		/*
+		 * Effectively skip the PI by recursively executing nextState again,
+		 * which will point idx at eIdx+1 and move us beyond it to the next
+		 * state.
+		 */
+		return nextState();
+	}
+
+	private State handleComment() throws IOException, XMLParseException {
+		// Find the end of the comment.
+		eIdx = scan(Constants.CMT_SFX);
+
+		if (eIdx == Constants.INVALID)
+			throw new XMLParseException(
+					"Unable to find closing '-->' for the comment starting at position "
+							+ gIdx
+							+ " in the XML document. Either the XML is malformed or contains individual TAG/TEXT constructs so long that BUFFER_SIZE will need to be increased in order to hold it in memory at one time.");
+
+		/*
+		 * Effectively skip the comment by recursively executing nextState
+		 * again, which will point idx at eIdx+1 and move us beyond it to the
+		 * next state.
+		 */
+		return nextState();
+	}
+
+	private void handleTag() throws IOException, XMLParseException {
+		// Processing a TAG, so find the end of it ('>')
+		eIdx = scan(Constants.A_GT);
+
+		if (eIdx == Constants.INVALID)
+			throw new XMLParseException(
+					"Unable to find closing '>' for the tag starting at position "
+							+ gIdx
+							+ " in the XML document. Either the XML is malformed or contains individual TAG/TEXT constructs so long that BUFFER_SIZE will need to be increased in order to hold it in memory at one time.");
+
+		/*
+		 * Check if we are dealing with an empty element (<book/>) in which case
+		 * we treat it special so it triggers both the START and END events for
+		 * the same marks.
+		 * 
+		 * If this isn't an empty element, then we just need to figure out if it
+		 * is a START_TAG (<hello>) or an END_TAG (</hello>).
+		 */
+		if (buffer[eIdx - 1] == Constants.FS) {
+			// Set the empty element flag
+			isEmptyElement = true;
+
+			// First call to next is START, next is END, then we move on.
+			state = State.START_TAG;
+		} else if (buffer[sIdx + 1] == Constants.FS)
+			state = State.END_TAG;
+		else
+			state = State.START_TAG;
+	}
+
 	/**
-	 * Convenience method used to scan the current buffer contents for a given
-	 * <code>byte</code> value, replacing stale data in the buffer with new data
-	 * from the input source as-needed to try and find the value.
+	 * Used to mark a CDATA block.
 	 * <p/>
-	 * Data located in the buffer before (but not including) the current
-	 * <code>idx</code> value, is considered "stale" or "processed" already and
-	 * can be safely discarded and replaced with fresh data. When
-	 * <code>idx</code> is equal to 0, that means there are no stale bytes that
-	 * can be expunged from the buffer and it is considered full.
-	 * <p/>
-	 * Every time stale data is ejected from the buffer, the remaining data (if
-	 * any) is moved to the front of the underlying <code>byte[]</code> buffer
-	 * and new data added in after the kept data to the end of the buffer; or as
-	 * much as was available from the underlying input source.
-	 * <p/>
-	 * One design detail about this method is that it always attempts to fill
-	 * the buffer with at least 9 bytes of data. The reason for this is because
-	 * detecting CDATA sections requires having the entire run of 9-char CDATA
-	 * prefix in the buffer at one time; we don't just want to find the
-	 * beginning &lt; char, we need to know if that is followed by the remaining
-	 * "![CDATA[" chars indicating a CDATA block.
-	 * <p/>
-	 * To avoid making this method implementation more complex and looking for
-	 * <code>byte[]</code> values instead of a single <code>byte</code> value,
-	 * we just always make sure the buffer has at least as many bytes in it from
-	 * the underlying stream as is necessary to detect the longest single run of
-	 * chars that can trigger a state-change in the parser... and that happens
-	 * to be a CDATA block which is 9 characters long.
-	 * 
-	 * @param value
-	 *            The <code>byte</code> value to find the index of.
-	 * 
-	 * @return the index in <code>buffer</code> where the given value was found
-	 *         or {@link Constants#INVALID} if the value could not be found.
+	 * This method assumes that <code>sIdx</code> points at the opening '&lt;'
+	 * char beginning the CDATA prefix, it will then find the closing CDATA
+	 * suffix. After that the method will adjust <code>sIdx</code> and
+	 * <code>eIdx</code> to point at the beginning and ending indices of the
+	 * actual character data contained within the CDATA prefix and suffix and
+	 * set the current parser state to {@link State#TEXT}.
 	 * 
 	 * @throws IOException
-	 *             if any error occurs with the underlying input source while
-	 *             trying to replace stale data in the <code>buffer</code> with
-	 *             new data.
+	 *             (calls {@link #scan(byte[])})
+	 * 
+	 * @throws XMLParseException
+	 *             if the CDATA-terminating suffix ({@link Constants#CD_END})
+	 *             cannot be found within the buffer even after expiring old
+	 *             data and filling it back up with new data from the underlying
+	 *             input source.
 	 */
-	private int markOLD(byte value) throws IOException {
+	private void handleCDATA() throws IOException, XMLParseException {
+		// Find the end of the CDATA block.
+		eIdx = scan(Constants.CDATA_SFX);
+
+		if (eIdx == Constants.INVALID)
+			throw new XMLParseException(
+					"Unable to find closing ']]>' for the CDATA block starting at position "
+							+ gIdx
+							+ " in the XML document. Either the XML is malformed or contains individual TAG/TEXT constructs so long that BUFFER_SIZE will need to be increased in order to hold it in memory at one time.");
+
+		// getText is handled differently for CDATA and plain char data.
+		isCDATA = true;
+
+		// Adjust eIdx to point at the index of the last CDATA suffix char
+		eIdx += Constants.CDATA_SFX.length - 1;
+
+		// Set the current state.
+		state = State.TEXT;
+	}
+
+	/**
+	 * Used to mark the bounds of character data (data found between the close
+	 * of one tag and opening of another).
+	 * <p/>
+	 * This method assumes that <code>sIdx</code> points at the opening '&lt;'
+	 * char of the tag that terminates this run of characters; it will then
+	 * adjust <code>eIdx</code> to equal 1 index before that and set
+	 * <code>sIdx</code> equal to the current <code>idx</code>. Lastly, the
+	 * state is set to {@link State#TEXT}.
+	 */
+	private void handleCharData() {
 		/*
-		 * TODO: Because of needing to find the ends of certain tags, like
-		 * CDATA, comments, processing instructions, it might be necessary to
-		 * modify this method to accept and match an array of bytes...
+		 * Processing TEXT, so the '<' we just found is actually the terminating
+		 * character to the run of characters and the beginning of the
+		 * characters is where idx is currently pointing (1 after the previous
+		 * end index as adjusted by the top of this method).
 		 */
+		eIdx = sIdx - 1;
+		sIdx = idx;
 
-		/*
-		 * If a previous mark operation had exhausted the buffer, attempt to
-		 * refill it if we have any data left.
-		 * 
-		 * Always make sure there is at least 9 chars in the buffer so we can
-		 * detect the longest run of chars that can cause a State change in the
-		 * parser (a CDATA block).
-		 */
-		if (idx + 9 >= bufferLength) {
-			fillBuffer();
-
-			/*
-			 * If we hit EOF as a result of trying to refill the buffer, then we
-			 * have exhausted all data to scan and must return INVALID to the
-			 * caller so it can handle the issue of the file being complete.
-			 * 
-			 * This typically signals the END_DOCUMENT event.
-			 */
-			if (bufferLength == -1)
-				return Constants.INVALID;
-		}
-
-		/*
-		 * Attempt to find the index of the given byte value. Use a little
-		 * short-cut here in case the value we are looking for is at the current
-		 * index (a likely scenario if this is being called from a switch-case
-		 * statement, switching on the values we are interested in anyway).
-		 * 
-		 * No reason to spend the extra microseconds calling down into
-		 * ScannerUtil if we already have what we want.
-		 */
-		int index = (buffer[idx] == value ? idx : ScannerUtil.indexOf(value,
-				idx, bufferLength - idx, buffer));
-
-		// Could not find the requested value anywhere in the buffer
-		if (index == Constants.INVALID) {
-			/*
-			 * We need more bytes to scan for the given value because we were
-			 * unable to find it. If our idx is > 0, that means there are old
-			 * byte values we have already processed that we can replace with
-			 * new values from the underlying stream in order to continue our
-			 * search for the given value. If idx == 0, that means the entire
-			 * buffer is already full and there is no old data that can be
-			 * expunged and replaced; we would just have to report to the caller
-			 * that we couldn't find the value.
-			 */
-			if (idx > 0) {
-				// We had some old data, so replace it with fresh data.
-				int bytesKept = fillBuffer();
-
-				/*
-				 * Try 1 more time to find the given value, starting the scan at
-				 * the beginning of the new content we just read in and skipping
-				 * all the stuff we already scanned the first time.
-				 */
-				index = ScannerUtil.indexOf(value, bytesKept,
-						(bufferLength - bytesKept), buffer);
-			}
-		}
-
-		return index;
+		// Set the current state.
+		state = State.TEXT;
 	}
 }

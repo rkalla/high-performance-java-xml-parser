@@ -28,8 +28,9 @@ public class ArrayUtil {
 			int i = 0;
 
 			// Loop and try and match every value
-			for (; i < length && values[i] == source[index + i]; i++)
-				;
+			for (; i < length && values[i] == source[index + i]; i++) {
+				// no-op, for-loop header does all the work.
+			}
 
 			// If we looped the whole array, then we DID match every value.
 			result = (i == length);
