@@ -122,9 +122,10 @@ public class HPXMLParserTest {
 					System.out.println(new String(INDENTS, 0, --indent) + "</"
 							+ parser.getTagName().decodeToString() + ">");
 					break;
-				// case TEXT:
-				// System.out.println("\t\""
-				// + parser.getText().decodeToString() + "\"");
+				 case TEXT:
+					 System.out.println("\tText Length: " + parser.getText());
+//				 System.out.println("\t\""
+//				 + parser.getText().decodeToString() + "\"");
 				}
 			}
 		} catch (Exception e) {

@@ -354,6 +354,9 @@ public class HPXMLParser {
 	}
 
 	private void reset() {
+		isCDATA = false;
+		isEmptyElement = false;
+
 		idx = 0;
 		gIdx = 0;
 		sIdx = Constants.INVALID;
