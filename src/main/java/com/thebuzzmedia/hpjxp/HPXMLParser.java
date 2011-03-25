@@ -402,6 +402,12 @@ public class HPXMLParser {
 		if (bytesKept == 0) {
 			bufferLength = input.read(buffer);
 		} else {
+			/*
+			 * TODO: By the time this gets called, idx is in the middle of a tag
+			 * and the comment bounds in simple.xml are not correctly being
+			 * marked. Not sure why. Some error *previous* to this is causing
+			 * the screw up.
+			 */
 			System.out.println("idx: " + idx + ", sIdx: " + sIdx + ", eIdx: "
 					+ eIdx + ", bufferLength: " + bufferLength
 					+ ", bytesKept: " + bytesKept + ", shiftCount: "
